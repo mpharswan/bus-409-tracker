@@ -2,9 +2,9 @@ name: Track route 409
 
 on:
   schedule:
-    # Every hour from 05:00 to 22:00 UTC (covers first to last 409 bus in
-    # Galway both before and after the clocks change on 25 October).
-    - cron: "0 5-22 * * *"
+    # Backup hourly start, off the busy :00 mark (GitHub often skips :00 jobs).
+    # 05:00-22:59 UTC covers the first to last 409 bus in Galway.
+    - cron: "23 5-22 * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   track:
@@ -48,3 +49,16 @@ jobs:
             sleep 10
           done
           exit 1
+
+      - name: Start the next run straight away (during bus hours)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hour=$(date +%H)
+          if [ "$hour" -ge 6 ] && [ "$hour" -lt 24 ]; then
+            gh workflow run track.yml --repo "$GITHUB_REPOSITORY" --ref main
+            echo "Next run requested."
+          else
+            echo "Outside bus hours; the morning schedule will restart tracking."
+          fi
