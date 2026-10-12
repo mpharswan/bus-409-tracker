@@ -1,0 +1,50 @@
+name: Track route 409
+
+on:
+  schedule:
+    # Every hour from 05:00 to 22:00 UTC (covers first to last 409 bus in
+    # Galway both before and after the clocks change on 25 October).
+    - cron: "0 5-22 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: track-409
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      TZ: Europe/Dublin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record 409 buses for 55 minutes
+        env:
+          NTA_API_KEY: ${{ secrets.NTA_API_KEY }}
+        run: python track_409.py --minutes 55
+
+      - name: Save results to the repository
+        if: always()
+        run: |
+          git config user.name "409 tracker"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A 409_delays.csv 409_state.json 409_trips.json || true
+          if git diff --cached --quiet; then
+            echo "Nothing new to save."
+            exit 0
+          fi
+          git commit -m "Log 409 delays $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3; do
+            git pull --rebase -X theirs && git push && exit 0
+            sleep 10
+          done
+          exit 1
