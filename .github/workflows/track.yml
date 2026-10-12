@@ -1,10 +1,14 @@
 name: Track route 409
 
+# Records route 409 every day from 08:00 to 18:00 Galway (Europe/Dublin) time.
+# Runs chain back to back; the cron below is a backup start, placed off the
+# busy :00 mark because GitHub often skips jobs scheduled exactly on the hour.
+
 on:
   schedule:
-    # Backup hourly start, off the busy :00 mark (GitHub often skips :00 jobs).
-    # 05:00-22:59 UTC covers the first to last 409 bus in Galway.
-    - cron: "23 5-22 * * *"
+    # 06:00-17:59 UTC: covers 08:00-18:00 Dublin both in summer time (UTC+1)
+    # and after the clocks go back on 25 October (UTC+0).
+    - cron: "23 6-17 * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -15,26 +19,57 @@ permissions:
   contents: write
   actions: write
 
+env:
+  TZ: Europe/Dublin
+  START_HOUR: "8"
+  END_HOUR: "18"
+
 jobs:
   track:
     runs-on: ubuntu-latest
-    timeout-minutes: 70
-    env:
-      TZ: Europe/Dublin
+    timeout-minutes: 75
     steps:
+      - name: Work out how long to record
+        id: window
+        run: |
+          now=$(date +%s)
+          start=$(date -d "today ${START_HOUR}:00" +%s)
+          end=$(date -d "today ${END_HOUR}:00" +%s)
+          if [ "$now" -ge "$end" ]; then
+            echo "After ${END_HOUR}:00 Galway time - nothing to record."
+            echo "minutes=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$now" -lt "$start" ]; then
+            wait=$((start - now))
+            if [ "$wait" -gt 3600 ]; then
+              echo "Too early - the next scheduled start will pick it up."
+              echo "minutes=0" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "Waiting $((wait / 60)) min until ${START_HOUR}:00."
+            sleep "$wait"
+            now=$(date +%s)
+          fi
+          left=$(( (end - now) / 60 ))
+          mins=$(( left < 55 ? left : 55 ))
+          echo "Recording for $mins minutes."
+          echo "minutes=$mins" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        if: steps.window.outputs.minutes != '0'
 
       - uses: actions/setup-python@v5
+        if: steps.window.outputs.minutes != '0'
         with:
           python-version: "3.12"
 
-      - name: Record 409 buses for 55 minutes
+      - name: Record 409 buses
+        if: steps.window.outputs.minutes != '0'
         env:
           NTA_API_KEY: ${{ secrets.NTA_API_KEY }}
-        run: python track_409.py --minutes 55
+        run: python track_409.py --minutes ${{ steps.window.outputs.minutes }}
 
       - name: Save results to the repository
-        if: always()
+        if: always() && steps.window.outputs.minutes != '0'
         run: |
           git config user.name "409 tracker"
           git config user.email "actions@users.noreply.github.com"
@@ -50,15 +85,15 @@ jobs:
           done
           exit 1
 
-      - name: Start the next run straight away (during bus hours)
-        if: always()
+      - name: Start the next run straight away (until 18:00)
+        if: always() && steps.window.outputs.minutes != '0'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          hour=$(date +%H)
-          if [ "$hour" -ge 6 ] && [ "$hour" -lt 24 ]; then
+          end=$(date -d "today ${END_HOUR}:00" +%s)
+          if [ $(( end - $(date +%s) )) -gt 120 ]; then
             gh workflow run track.yml --repo "$GITHUB_REPOSITORY" --ref main
             echo "Next run requested."
           else
-            echo "Outside bus hours; the morning schedule will restart tracking."
+            echo "Reached ${END_HOUR}:00 - stopping until tomorrow morning."
           fi
