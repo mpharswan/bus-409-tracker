@@ -48,7 +48,7 @@ def fetch(url, headers=None, timeout=60):
 
 def read_csv_from_zip(zf, name):
     with zf.open(name) as f:
-        return csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
+        yield from csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
 
 
 def load_static():
